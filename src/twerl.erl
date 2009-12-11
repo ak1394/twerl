@@ -7,7 +7,7 @@
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
--define(BASE, "http://twitter.com/").
+-define(BASE, "http://api.twitter.com").
 -define(HTTP_OPTIONS, [{timeout, 120000}]).
 -define(TIMEOUT, 180000).
 
@@ -31,6 +31,7 @@ statuses_mentions(Auth, Args) -> gen_server:call(?MODULE, {statuses_mentions, Au
 statuses_show(Auth, Args) -> gen_server:call(?MODULE, {statuses_show, Auth, Args}, ?TIMEOUT).
 status_update(Auth, Args) -> gen_server:call(?MODULE, {statuses_update, Auth, Args}, ?TIMEOUT).
 status_destroy(Auth, Args) -> gen_server:call(?MODULE, {statuses_destroy, Auth, Args}, ?TIMEOUT).
+status_retweet(Auth, Args) -> gen_server:call(?MODULE, {statuses_retweet, Auth, Args}, ?TIMEOUT).
 statuses_user_timeline(Auth, Args) -> gen_server:call(?MODULE, {statuses_user_timeline, Auth, Args}, ?TIMEOUT).
 user_show(Auth, Args) -> gen_server:call(?MODULE, {users_show, Auth, Args}, ?TIMEOUT).
 
@@ -151,19 +152,20 @@ request(post, URL, {basic, User, Password}, Args) ->
     RequestId.
 
 
-request_spec(direct_messages) -> {get, ["direct_messages"]};
-request_spec(direct_messages_sent) -> {get, ["direct_messages/sent"]};
-request_spec(direct_messages_new) -> {post, ["direct_messages/new"]};
-request_spec(direct_messages_destroy) -> {post, ["direct_messages/destroy/", id]};
-request_spec(friendships_create) -> {post, ["friendships/create/", id]};
-request_spec(friendships_destroy) -> {post, ["friendships/destroy/", id]};
-request_spec(statuses_home_timeline) -> {get, ["statuses/home_timeline"]};
-request_spec(statuses_mentions) -> {get, ["statuses/mentions"]};
-request_spec(statuses_show) -> {get, ["statuses/show/", id]};
-request_spec(statuses_destroy) -> {post, ["statuses/destroy/", id]};
-request_spec(statuses_update) -> {post, ["statuses/update"]};
-request_spec(statuses_user_timeline) -> {get, ["statuses/user_timeline"]};
-request_spec(users_show) -> {get, ["/users/show"]}.
+request_spec(direct_messages) -> {get, ["/1/direct_messages"]};
+request_spec(direct_messages_sent) -> {get, ["/1/direct_messages/sent"]};
+request_spec(direct_messages_new) -> {post, ["/1/direct_messages/new"]};
+request_spec(direct_messages_destroy) -> {post, ["/1/direct_messages/destroy/", id]};
+request_spec(friendships_create) -> {post, ["/1/friendships/create/", id]};
+request_spec(friendships_destroy) -> {post, ["/1/friendships/destroy/", id]};
+request_spec(statuses_home_timeline) -> {get, ["/1/statuses/home_timeline"]};
+request_spec(statuses_mentions) -> {get, ["/1/statuses/mentions"]};
+request_spec(statuses_show) -> {get, ["/1/statuses/show/", id]};
+request_spec(statuses_destroy) -> {post, ["/1/statuses/destroy/", id]};
+request_spec(statuses_retweet) -> {post, ["/1/statuses/retweet/", id]};
+request_spec(statuses_update) -> {post, ["/1/statuses/update"]};
+request_spec(statuses_user_timeline) -> {get, ["/1/statuses/user_timeline"]};
+request_spec(users_show) -> {get, ["/1/users/show"]}.
 
 element_spec(<<"retweeted_status">>) -> {retweeted_status, fun({struct, Status}) -> decode_response(Status) end};
 element_spec(<<"user">>) -> {user, fun({struct, User}) -> decode_user(User) end};
