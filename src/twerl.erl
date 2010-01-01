@@ -99,6 +99,27 @@ handle_info({http, {RequestId, {{_HTTPVersion, 200, _Text}, Headers, Body}}}, St
     gen_server:reply(From, {ok, Response, Limits}),
     {noreply, State};
 
+%% todo check ratelemit-remining
+handle_info({http, {RequestId, {{_HTTPVersion, 400, _Text}, Headers, Body}}}, State) ->
+    [{_Key, _Request, From}] = ets:lookup(twerl, RequestId),
+    ets:delete(twerl, RequestId),
+    Limits = [{Key, list_to_integer(Value)} || {Key, Value} <-
+                [{ratelimit_limit, proplists:get_value("x-ratelimit-limit", Headers)},
+                 {ratelimit_reset, proplists:get_value("x-ratelimit-reset", Headers)},
+                 {ratelimit_remaining, proplists:get_value("x-ratelimit-remaining", Headers)}], Value /= undefined],
+    gen_server:reply(From, {error, {rate_limit, Limits}}),
+    {noreply, State};
+
+handle_info({http, {RequestId, {{_HTTPVersion, 401, _Text}, Headers, Body}}}, State) ->
+    [{_Key, _Request, From}] = ets:lookup(twerl, RequestId),
+    ets:delete(twerl, RequestId),
+    Limits = [{Key, list_to_integer(Value)} || {Key, Value} <-
+                [{ratelimit_limit, proplists:get_value("x-ratelimit-limit", Headers)},
+                 {ratelimit_reset, proplists:get_value("x-ratelimit-reset", Headers)},
+                 {ratelimit_remaining, proplists:get_value("x-ratelimit-remaining", Headers)}], Value /= undefined],
+    gen_server:reply(From, {error, {noauth, Limits}}),
+    {noreply, State};
+
 handle_info({http, {RequestId, {error, Reason}}}, State) ->
     [{_Key, _Request, From}] = ets:lookup(twerl, RequestId),
     ets:delete(twerl, RequestId),
