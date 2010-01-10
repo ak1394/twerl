@@ -34,6 +34,9 @@ status_destroy(Auth, Args) -> gen_server:call(?MODULE, {statuses_destroy, Auth, 
 status_retweet(Auth, Args) -> gen_server:call(?MODULE, {statuses_retweet, Auth, Args}, ?TIMEOUT).
 statuses_user_timeline(Auth, Args) -> gen_server:call(?MODULE, {statuses_user_timeline, Auth, Args}, ?TIMEOUT).
 user_show(Auth, Args) -> gen_server:call(?MODULE, {users_show, Auth, Args}, ?TIMEOUT).
+favorites(Auth, Args) -> gen_server:call(?MODULE, {favorites, Auth, Args}, ?TIMEOUT).
+favorites_create(Auth, Args) -> gen_server:call(?MODULE, {favorites_create, Auth, Args}, ?TIMEOUT).
+favorites_destroy(Auth, Args) -> gen_server:call(?MODULE, {favorites_destroy, Auth, Args}, ?TIMEOUT).
 
 %% ====================================================================
 %% Server functions
@@ -172,7 +175,6 @@ request(post, URL, {basic, User, Password}, Args) ->
 										  "application/x-www-form-urlencoded", Post}, ?HTTP_OPTIONS, [{sync, false}]),
     RequestId.
 
-
 request_spec(direct_messages) -> {get, ["/1/direct_messages"]};
 request_spec(direct_messages_sent) -> {get, ["/1/direct_messages/sent"]};
 request_spec(direct_messages_new) -> {post, ["/1/direct_messages/new"]};
@@ -186,7 +188,10 @@ request_spec(statuses_destroy) -> {post, ["/1/statuses/destroy/", id]};
 request_spec(statuses_retweet) -> {post, ["/1/statuses/retweet/", id]};
 request_spec(statuses_update) -> {post, ["/1/statuses/update"]};
 request_spec(statuses_user_timeline) -> {get, ["/1/statuses/user_timeline"]};
-request_spec(users_show) -> {get, ["/1/users/show"]}.
+request_spec(users_show) -> {get, ["/1/users/show"]};
+request_spec(favorites) -> {get, ["/1/favorites"]};
+request_spec(favorites_create) -> {post, ["/1/favorites/create/", id]};
+request_spec(favorites_destroy) -> {post, ["/1/favorites/destroy/", id]}.
 
 element_spec(<<"retweeted_status">>) -> {retweeted_status, fun({struct, Status}) -> decode_response(Status) end};
 element_spec(<<"user">>) -> {user, fun({struct, User}) -> decode_user(User) end};
