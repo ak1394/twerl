@@ -94,12 +94,17 @@ handle_cast(_Request, #state{} = State) ->
 handle_info({http, {RequestId, {{_HTTPVersion, 200, _Text}, Headers, Body}}}, State) ->
     [{_Key, _Request, From}] = ets:lookup(twerl, RequestId),
     ets:delete(twerl, RequestId),
-    Response = decode_responses(mochijson2:decode(Body)),
-    Limits = [{Key, list_to_integer(Value)} || {Key, Value} <-
-                [{ratelimit_limit, proplists:get_value("x-ratelimit-limit", Headers)},
-                 {ratelimit_reset, proplists:get_value("x-ratelimit-reset", Headers)},
-                 {ratelimit_remaining, proplists:get_value("x-ratelimit-remaining", Headers)}], Value /= undefined],
-    gen_server:reply(From, {ok, Response, Limits}),
+    try
+        Response = decode_responses(mochijson2:decode(Body)),
+        Limits = [{Key, list_to_integer(Value)} || {Key, Value} <-
+                    [{ratelimit_limit, proplists:get_value("x-ratelimit-limit", Headers)},
+                     {ratelimit_reset, proplists:get_value("x-ratelimit-reset", Headers)},
+                     {ratelimit_remaining, proplists:get_value("x-ratelimit-remaining", Headers)}], Value /= undefined],
+        gen_server:reply(From, {ok, Response, Limits})
+    catch
+        error:Exception ->
+            gen_server:reply(From, {error, {exception, Exception}})
+    end,
     {noreply, State};
 
 %% todo check ratelemit-remining
