@@ -7,9 +7,11 @@
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
--define(BASE, "http://api.twitter.com").
+-define(BASE, "http://api.twitter.com/1").
+-define(SEARCH, "http://search.twitter.com/search.json").
 -define(HTTP_OPTIONS, [{timeout, 120000}]).
 -define(TIMEOUT, 180000).
+-define(USERAGENT, "PavoMe").
 
 -record(state, {}).
 
@@ -37,6 +39,7 @@ user_show(Auth, Args) -> gen_server:call(?MODULE, {users_show, Auth, Args}, ?TIM
 favorites(Auth, Args) -> gen_server:call(?MODULE, {favorites, Auth, Args}, ?TIMEOUT).
 favorites_create(Auth, Args) -> gen_server:call(?MODULE, {favorites_create, Auth, Args}, ?TIMEOUT).
 favorites_destroy(Auth, Args) -> gen_server:call(?MODULE, {favorites_destroy, Auth, Args}, ?TIMEOUT).
+search(Args) -> gen_server:call(?MODULE, {search, Args}, ?TIMEOUT).
 
 %% ====================================================================
 %% Server functions
@@ -64,6 +67,12 @@ init([]) ->
 %%          {stop, Reason, Reply, State}   | (terminate/2 is called)
 %%          {stop, Reason, State}            (terminate/2 is called)
 %% --------------------------------------------------------------------
+handle_call({search, Args}, From, #state{} = State) ->
+    URL = ?SEARCH ++ "?" ++ oauth_uri:params_to_string([{to_list(K), to_list(V)} || {K, V} <- Args]),
+	{ok, RequestId} = http:request(get, {URL, [{"user-agent", ?USERAGENT}]}, ?HTTP_OPTIONS, [{sync, false}]),
+	ets:insert(twerl, {RequestId, search, From}),
+    {noreply, State};
+
 handle_call({Request, Auth, Args}, From, #state{} = State) ->
 	{Method, URL, NormalArgs} = prepare_request(request_spec(Request), Args),
 	RequestId = request(Method, URL, Auth, NormalArgs),
@@ -92,23 +101,29 @@ handle_cast(_Request, #state{} = State) ->
 %%          {stop, Reason, State}            (terminate/2 is called)
 %% --------------------------------------------------------------------
 handle_info({http, {RequestId, {{_HTTPVersion, 200, _Text}, Headers, Body}}}, State) ->
-    [{_Key, _Request, From}] = ets:lookup(twerl, RequestId),
-    ets:delete(twerl, RequestId),
+    [{_Key, Request, From}] = ets:lookup(twerl, RequestId),
     try
-        Response = decode_responses(mochijson2:decode(Body)),
-        Limits = [{Key, list_to_integer(Value)} || {Key, Value} <-
-                    [{ratelimit_limit, proplists:get_value("x-ratelimit-limit", Headers)},
-                     {ratelimit_reset, proplists:get_value("x-ratelimit-reset", Headers)},
-                     {ratelimit_remaining, proplists:get_value("x-ratelimit-remaining", Headers)}], Value /= undefined],
-        gen_server:reply(From, {ok, Response, Limits})
+        case Request of
+            search ->
+                Response = decode_search_responses(mochijson2:decode(Body)),
+                gen_server:reply(From, {ok, Response});
+            _ ->
+                Response = decode_responses(mochijson2:decode(Body)),
+                Limits = [{Key, list_to_integer(Value)} || {Key, Value} <-
+                            [{ratelimit_limit, proplists:get_value("x-ratelimit-limit", Headers)},
+                             {ratelimit_reset, proplists:get_value("x-ratelimit-reset", Headers)},
+                             {ratelimit_remaining, proplists:get_value("x-ratelimit-remaining", Headers)}], Value /= undefined],
+                gen_server:reply(From, {ok, Response, Limits})
+        end
     catch
         error:Exception ->
             gen_server:reply(From, {error, {exception, Exception}})
     end,
+    ets:delete(twerl, RequestId),
     {noreply, State};
 
 %% todo check ratelemit-remining
-handle_info({http, {RequestId, {{_HTTPVersion, 400, _Text}, Headers, Body}}}, State) ->
+handle_info({http, {RequestId, {{_HTTPVersion, 400, _Text}, Headers, _Body}}}, State) ->
     [{_Key, _Request, From}] = ets:lookup(twerl, RequestId),
     ets:delete(twerl, RequestId),
     Limits = [{Key, list_to_integer(Value)} || {Key, Value} <-
@@ -118,7 +133,7 @@ handle_info({http, {RequestId, {{_HTTPVersion, 400, _Text}, Headers, Body}}}, St
     gen_server:reply(From, {error, {rate_limit, Limits}}),
     {noreply, State};
 
-handle_info({http, {RequestId, {{_HTTPVersion, 401, _Text}, Headers, Body}}}, State) ->
+handle_info({http, {RequestId, {{_HTTPVersion, 401, _Text}, Headers, _Body}}}, State) ->
     [{_Key, _Request, From}] = ets:lookup(twerl, RequestId),
     ets:delete(twerl, RequestId),
     Limits = [{Key, list_to_integer(Value)} || {Key, Value} <-
@@ -134,10 +149,29 @@ handle_info({http, {RequestId, {error, Reason}}}, State) ->
     gen_server:reply(From, {error, Reason}),
     {noreply, State};
 
-handle_info({http, {RequestId, Other}}, State) ->
+handle_info({http, {RequestId, {{_HTTPVersion, _Other, _Text}, _Headers, <<"{\"error\":", _/binary>> = Body}}}, State) ->
     [{_Key, _Request, From}] = ets:lookup(twerl, RequestId),
     ets:delete(twerl, RequestId),
-    gen_server:reply(From, {error, {unexpected_response, Other}}),
+    try mochijson2:decode(Body) of 
+        {struct, Json} ->
+            case proplists:get_value(<<"error">>, Json, undefined) of
+                undefined ->
+                    gen_server:reply(From, {error, unexpected_response});
+                Message ->
+                    gen_server:reply(From, {error, {message, Message}})
+            end;
+        _ ->
+            gen_server:reply(From, {error, unexpected_response})
+    catch
+        error:_ ->
+            gen_server:reply(From, {error, unexpected_response})
+    end,
+    {noreply, State};
+
+handle_info({http, {RequestId, _Other}}, State) ->
+    [{_Key, _Request, From}] = ets:lookup(twerl, RequestId),
+    ets:delete(twerl, RequestId),
+    gen_server:reply(From, {error, unexpected_response}),
     {noreply, State}.
 
 %% --------------------------------------------------------------------
@@ -180,23 +214,23 @@ request(post, URL, {basic, User, Password}, Args) ->
 										  "application/x-www-form-urlencoded", Post}, ?HTTP_OPTIONS, [{sync, false}]),
     RequestId.
 
-request_spec(direct_messages) -> {get, ["/1/direct_messages"]};
-request_spec(direct_messages_sent) -> {get, ["/1/direct_messages/sent"]};
-request_spec(direct_messages_new) -> {post, ["/1/direct_messages/new"]};
-request_spec(direct_messages_destroy) -> {post, ["/1/direct_messages/destroy/", id]};
-request_spec(friendships_create) -> {post, ["/1/friendships/create/", id]};
-request_spec(friendships_destroy) -> {post, ["/1/friendships/destroy/", id]};
-request_spec(statuses_home_timeline) -> {get, ["/1/statuses/home_timeline"]};
-request_spec(statuses_mentions) -> {get, ["/1/statuses/mentions"]};
-request_spec(statuses_show) -> {get, ["/1/statuses/show/", id]};
-request_spec(statuses_destroy) -> {post, ["/1/statuses/destroy/", id]};
-request_spec(statuses_retweet) -> {post, ["/1/statuses/retweet/", id]};
-request_spec(statuses_update) -> {post, ["/1/statuses/update"]};
-request_spec(statuses_user_timeline) -> {get, ["/1/statuses/user_timeline"]};
-request_spec(users_show) -> {get, ["/1/users/show"]};
-request_spec(favorites) -> {get, ["/1/favorites"]};
-request_spec(favorites_create) -> {post, ["/1/favorites/create/", id]};
-request_spec(favorites_destroy) -> {post, ["/1/favorites/destroy/", id]}.
+request_spec(direct_messages) -> {get, ["/direct_messages"]};
+request_spec(direct_messages_sent) -> {get, ["/direct_messages/sent"]};
+request_spec(direct_messages_new) -> {post, ["/direct_messages/new"]};
+request_spec(direct_messages_destroy) -> {post, ["/direct_messages/destroy/", id]};
+request_spec(friendships_create) -> {post, ["/friendships/create/", id]};
+request_spec(friendships_destroy) -> {post, ["/friendships/destroy/", id]};
+request_spec(statuses_home_timeline) -> {get, ["/statuses/home_timeline"]};
+request_spec(statuses_mentions) -> {get, ["/statuses/mentions"]};
+request_spec(statuses_show) -> {get, ["/statuses/show/", id]};
+request_spec(statuses_destroy) -> {post, ["/statuses/destroy/", id]};
+request_spec(statuses_retweet) -> {post, ["/statuses/retweet/", id]};
+request_spec(statuses_update) -> {post, ["/statuses/update"]};
+request_spec(statuses_user_timeline) -> {get, ["/statuses/user_timeline"]};
+request_spec(users_show) -> {get, ["/users/show"]};
+request_spec(favorites) -> {get, ["/favorites"]};
+request_spec(favorites_create) -> {post, ["/favorites/create/", id]};
+request_spec(favorites_destroy) -> {post, ["/favorites/destroy/", id]}.
 
 element_spec(<<"retweeted_status">>) -> {retweeted_status, fun({struct, Status}) -> decode_response(Status) end};
 element_spec(<<"user">>) -> {user, fun({struct, User}) -> decode_user(User) end};
@@ -242,6 +276,25 @@ element_spec(<<"utc_offset">>) -> utc_offset;
 element_spec(<<"verified">>) -> verified;
 element_spec(_) -> undefined.
 
+search_element_spec(<<"created_at">>) -> {created_at, fun(Value) -> httpd_util:convert_request_date(binary_to_list(Value)) end};
+search_element_spec(<<"from_user">>) -> from_user;
+search_element_spec(<<"from_user_id">>) -> from_user_id;
+search_element_spec(<<"geo">>) -> geo;
+search_element_spec(<<"id">>) -> id;
+search_element_spec(<<"iso_language">>) -> iso_language;
+search_element_spec(<<"profile_image_url">>) -> profile_image_url;
+search_element_spec(<<"source">>) -> source;
+search_element_spec(<<"text">>) -> text;
+search_element_spec(<<"to_user">>) -> to_user;
+search_element_spec(<<"to_user_id">>) -> to_user_id;
+search_element_spec(_) -> undefined.
+
+decode_search_responses({struct, [{<<"results">>, Results} | _Details]}) ->
+    [decode_search_response(Result) || {struct, Result} <- Results].
+
+decode_search_response(Result) ->
+    [decode_search_element(Name, Value) || {Name, Value} <- Result].
+
 decode_responses({struct, Status}) ->
     decode_response(Status);
 decode_responses(Responses) ->
@@ -251,7 +304,13 @@ decode_response(Response) ->
     [decode_element(Name, Value) || {Name, Value} <- Response].
 
 decode_element(Name, Value) ->
-	case element_spec(Name) of
+    decode_element_fun(Name, Value, fun element_spec/1).
+
+decode_search_element(Name, Value) ->
+    decode_element_fun(Name, Value, fun search_element_spec/1).
+
+decode_element_fun(Name, Value, SpecFun) ->
+	case SpecFun(Name) of
 		undefined ->
 			{Name, Value};
 		{Key, Fun} ->
