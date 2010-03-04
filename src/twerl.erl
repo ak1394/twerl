@@ -9,6 +9,7 @@
 
 -define(BASE, "http://api.twitter.com/1").
 -define(SEARCH, "http://search.twitter.com/search.json").
+-define(XAUTH, "https://api.twitter.com/oauth/access_token").
 -define(HTTP_OPTIONS, [{timeout, 120000}]).
 -define(TIMEOUT, 180000).
 -define(USERAGENT, "PavoMe").
@@ -40,6 +41,7 @@ favorites(Auth, Args) -> gen_server:call(?MODULE, {favorites, Auth, Args}, ?TIME
 favorites_create(Auth, Args) -> gen_server:call(?MODULE, {favorites_create, Auth, Args}, ?TIMEOUT).
 favorites_destroy(Auth, Args) -> gen_server:call(?MODULE, {favorites_destroy, Auth, Args}, ?TIMEOUT).
 search(Args) -> gen_server:call(?MODULE, {search, Args}, ?TIMEOUT).
+xauth(Consumer, Username, Password) -> gen_server:call(?MODULE, {xauth, Consumer, Username, Password}, ?TIMEOUT).
 
 %% ====================================================================
 %% Server functions
@@ -67,6 +69,14 @@ init([]) ->
 %%          {stop, Reason, Reply, State}   | (terminate/2 is called)
 %%          {stop, Reason, State}            (terminate/2 is called)
 %% --------------------------------------------------------------------
+handle_call({xauth, Consumer, Username, Password}, From, #state{} = State) ->
+    Args = [{"x_auth_username", Username}, {"x_auth_password", Password}, {"x_auth_mode", "client_auth"}],
+    SignedParams = oauth:signed_params("GET", ?XAUTH, Args, Consumer, "", ""),
+    OAuthURL = oauth:uri(?XAUTH, SignedParams),
+    {ok, RequestId} = http:request(get, {OAuthURL, []}, ?HTTP_OPTIONS, [{sync, false}]),
+	ets:insert(twerl, {RequestId, xauth, From}),
+    {noreply, State};
+
 handle_call({search, Args}, From, #state{} = State) ->
     URL = ?SEARCH ++ "?" ++ oauth_uri:params_to_string([{to_list(K), to_list(V)} || {K, V} <- Args]),
 	{ok, RequestId} = http:request(get, {URL, [{"user-agent", ?USERAGENT}]}, ?HTTP_OPTIONS, [{sync, false}]),
@@ -107,6 +117,13 @@ handle_info({http, {RequestId, {{_HTTPVersion, 200, _Text}, Headers, Body}}}, St
             search ->
                 Response = decode_search_responses(mochijson2:decode(Body)),
                 gen_server:reply(From, {ok, Response});
+            xauth ->
+                Params = oauth_uri:params_from_string(binary_to_list(Body)),
+                Result = [{token, proplists:get_value("oauth_token", Params)},
+                          {secret, proplists:get_value("oauth_token_secret", Params)},
+                          {username, proplists:get_value("screen_name", Params)},
+                          {user_id, proplists:get_value("user_id", Params)}],
+                gen_server:reply(From, {ok, Result});
             _ ->
                 Response = decode_responses(mochijson2:decode(Body)),
                 Limits = [{Key, list_to_integer(Value)} || {Key, Value} <-
