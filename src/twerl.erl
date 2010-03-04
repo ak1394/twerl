@@ -133,14 +133,14 @@ handle_info({http, {RequestId, {{_HTTPVersion, 400, _Text}, Headers, _Body}}}, S
     gen_server:reply(From, {error, {rate_limit, Limits}}),
     {noreply, State};
 
-handle_info({http, {RequestId, {{_HTTPVersion, 401, _Text}, Headers, _Body}}}, State) ->
+handle_info({http, {RequestId, {{_HTTPVersion, 401, _Text}, Headers, Body}}}, State) ->
     [{_Key, _Request, From}] = ets:lookup(twerl, RequestId),
     ets:delete(twerl, RequestId),
     Limits = [{Key, list_to_integer(Value)} || {Key, Value} <-
                 [{ratelimit_limit, proplists:get_value("x-ratelimit-limit", Headers)},
                  {ratelimit_reset, proplists:get_value("x-ratelimit-reset", Headers)},
                  {ratelimit_remaining, proplists:get_value("x-ratelimit-remaining", Headers)}], Value /= undefined],
-    gen_server:reply(From, {error, {noauth, Limits}}),
+    gen_server:reply(From, {error, {noauth, Limits, Body}}),
     {noreply, State};
 
 handle_info({http, {RequestId, {error, Reason}}}, State) ->
@@ -156,22 +156,22 @@ handle_info({http, {RequestId, {{_HTTPVersion, _Other, _Text}, _Headers, <<"{\"e
         {struct, Json} ->
             case proplists:get_value(<<"error">>, Json, undefined) of
                 undefined ->
-                    gen_server:reply(From, {error, unexpected_response});
+                    gen_server:reply(From, {error, {unexpected_response, Body}});
                 Message ->
                     gen_server:reply(From, {error, {message, Message}})
             end;
         _ ->
-            gen_server:reply(From, {error, unexpected_response})
+            gen_server:reply(From, {error, {unexpected_response, Body}})
     catch
         error:_ ->
-            gen_server:reply(From, {error, unexpected_response})
+            gen_server:reply(From, {error, {unexpected_response, Body}})
     end,
     {noreply, State};
 
-handle_info({http, {RequestId, _Other}}, State) ->
+handle_info({http, {RequestId, Other}}, State) ->
     [{_Key, _Request, From}] = ets:lookup(twerl, RequestId),
     ets:delete(twerl, RequestId),
-    gen_server:reply(From, {error, unexpected_response}),
+    gen_server:reply(From, {error, {unexpected_response, Other}}),
     {noreply, State}.
 
 %% --------------------------------------------------------------------
