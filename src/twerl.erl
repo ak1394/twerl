@@ -71,9 +71,9 @@ init([]) ->
 %% --------------------------------------------------------------------
 handle_call({xauth, Consumer, Username, Password}, From, #state{} = State) ->
     Args = [{"x_auth_username", Username}, {"x_auth_password", Password}, {"x_auth_mode", "client_auth"}],
-    SignedParams = oauth:signed_params("GET", ?XAUTH, Args, Consumer, "", ""),
-    OAuthURL = oauth:uri(?XAUTH, SignedParams),
-    {ok, RequestId} = http:request(get, {OAuthURL, []}, ?HTTP_OPTIONS, [{sync, false}]),
+    SignedParams = oauth:signed_params("POST", ?XAUTH, Args, Consumer, "", ""),
+    Post = oauth_uri:params_to_string(SignedParams),
+    {ok, RequestId} = http:request(post, {?XAUTH, [], "application/x-www-form-urlencoded", Post}, [{timeout, 15000}], [{sync, false}]),
 	ets:insert(twerl, {RequestId, xauth, From}),
     {noreply, State};
 
